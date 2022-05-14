@@ -73,7 +73,7 @@ public class LocationService extends Service {
 	private long MIN_TIME_BW_UPDATES = 30 * 1000; // n seconds
 	private float MIN_DISTANCE_CHANGE_FOR_UPDATES = 0.0f;
 
-	private BlockingQueue<Location> locationQueue = new ArrayBlockingQueue<>(512);
+	private BlockingQueue<Location> locationQueue = new ArrayBlockingQueue<>(4096);
 
 	private boolean closing = false;
 
@@ -108,7 +108,7 @@ public class LocationService extends Service {
 		boolean startedFromNotification = intent.getBooleanExtra(EXTRA_STARTED_FROM_NOTIFICATION, false);
 
 		if (startedFromNotification) {
-//			this.removeLocationUpdates();
+			// this.removeLocationUpdates();
 			this.stopSelf();
 		}
 
@@ -192,7 +192,7 @@ public class LocationService extends Service {
 			Log.d(TAG, Log.getStackTraceString(e));
 		}
 		stopService(new Intent(getApplicationContext(), LocationService.class));
-//		 mServiceHandler.removeCallbacksAndMessages(null);
+		// mServiceHandler.removeCallbacksAndMessages(null);
 	}
 
 	public void requestLocationUpdates() {
@@ -206,11 +206,11 @@ public class LocationService extends Service {
 		try {
 			locationManager = (LocationManager) getApplicationContext().getSystemService(Context.LOCATION_SERVICE);
 			boolean isGPSEnabled = locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER);
-				if (isGPSEnabled) {
-					if (locationManager != null) {
-						locationManager.requestLocationUpdates(LocationManager.GPS_PROVIDER, MIN_TIME_BW_UPDATES,
-								MIN_DISTANCE_CHANGE_FOR_UPDATES, locationProviderListener);
-					}
+			if (isGPSEnabled) {
+				if (locationManager != null) {
+					locationManager.requestLocationUpdates(LocationManager.GPS_PROVIDER, MIN_TIME_BW_UPDATES,
+							MIN_DISTANCE_CHANGE_FOR_UPDATES, locationProviderListener);
+				}
 			}
 		} catch (SecurityException e) {
 			Log.d(TAG, Log.getStackTraceString(e));
@@ -219,7 +219,7 @@ public class LocationService extends Service {
 		}
 	}
 
-	public CountDownTimer timer = new CountDownTimer(45 * 1000,1 * 1000) {
+	public CountDownTimer timer = new CountDownTimer(45 * 1000, 1 * 1000) {
 		@Override
 		public void onTick(long millisUntilFinished) {
 			// do nothing
@@ -237,7 +237,7 @@ public class LocationService extends Service {
 			} else {
 				Log.d(TAG, "lastLocation was null so no insert happened");
 			}
-			//start the timer again
+			// start the timer again
 			timer.start();
 		}
 	};
@@ -250,7 +250,7 @@ public class LocationService extends Service {
 			lastLocation = location;
 			try {
 				locationQueue.put(location);
-				//cycle the timer
+				// cycle the timer
 				timer.cancel();
 				timer.start();
 			} catch (Exception e) {
@@ -280,8 +280,10 @@ public class LocationService extends Service {
 	 */
 	public void readLocationQueue() {
 		while (!closing) {
+			boolean inserted = false;
+			Location location = null;
 			try {
-				Location location = this.locationQueue.take();
+				location = this.locationQueue.take();
 
 				TelephonyManager tm = (TelephonyManager) getSystemService(Context.TELEPHONY_SERVICE);
 
@@ -289,7 +291,8 @@ public class LocationService extends Service {
 
 				// calculate the proper gps time
 				long gps_time_since_boot_in_milliseconds = location.getElapsedRealtimeNanos() / 1000000;
-				long boot_time_in_milliseconds = (java.lang.System.currentTimeMillis() - android.os.SystemClock.elapsedRealtime());
+				long boot_time_in_milliseconds = (java.lang.System.currentTimeMillis()
+						- android.os.SystemClock.elapsedRealtime());
 				long gps_time = (boot_time_in_milliseconds + gps_time_since_boot_in_milliseconds) / 1000;
 
 				// latitude
@@ -313,15 +316,17 @@ public class LocationService extends Service {
 					json.put("altitude", location.getAltitude());
 					json.put("bearing", location.getBearing());
 
-					if (ActivityCompat.checkSelfPermission(this, Manifest.permission.READ_PHONE_STATE) != PackageManager.PERMISSION_GRANTED) {
+					if (ActivityCompat.checkSelfPermission(this,
+							Manifest.permission.READ_PHONE_STATE) != PackageManager.PERMISSION_GRANTED) {
 						Log.d(TAG, "IMEI is off. Setting it to a funny number");
 						json.put("imei", "1234567890");
 					} else {
 						String id = null;
 						try {
 							id = tm.getDeviceId();
-						}catch (SecurityException e) {
-							// permission for imei is blocked in newer versions of android. Use the ANDROID_ID instead if we have to use a unique id
+						} catch (SecurityException e) {
+							// permission for imei is blocked in newer versions of android. Use the
+							// ANDROID_ID instead if we have to use a unique id
 							id = Settings.Secure.getString(getContentResolver(), Settings.Secure.ANDROID_ID);
 						}
 						json.put("imei", id);
@@ -336,15 +341,14 @@ public class LocationService extends Service {
 				RequestBody body = RequestBody.create(jsonString, MediaType.parse("application/json"));
 				Request request = new Request.Builder().url("https://madeit.jrcichra.dev/phone_location").post(body)
 						.build();
-				// Request request = new
-				// Request.Builder().url("http://10.0.0.40:3000/phone_location").post(body).build();
 
 				Call call = client.newCall(request);
 				Response response = call.execute();
 
-				if (!response.isSuccessful()) {
+				if (response.isSuccessful()) {
+					inserted = true;
+				} else {
 					Log.d(TAG, "HTTP response error");
-					this.locationQueue.put(location);
 				}
 
 				// Notify anyone listening for broadcasts about the new location.
@@ -355,6 +359,16 @@ public class LocationService extends Service {
 			} catch (IOException e) {
 				Log.e(TAG, "Input/Output error", e);
 			}
+
+			if (!inserted && location != null) {
+				Log.d(TAG, "Location not inserted. Putting it back in the queue");
+				try {
+					this.locationQueue.put(location);
+				} catch (InterruptedException e) {
+					Log.d(TAG, Log.getStackTraceString(e));
+				}
+			}
+
 		}
 	}
 
